@@ -1,3 +1,0 @@
-- array of areas, and what category they are in.
-- penalize for perimiter
-- 
