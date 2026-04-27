@@ -15,6 +15,6 @@ def main():
     img = load_image()
     logger.info(f"Image size: {img.size}")
     model = Backbone()
-    logger.debug("Processing big image...")
-    data = model.process_big_image(img)
+    logger.debug("Processing image...")
+    data = model.process_image(img)
     torch.save(data, "features.pt")

@@ -21,6 +21,29 @@ class Backbone:
         outputs = self.model(**inputs)
         return outputs.last_hidden_state
 
+    def process_image(self, image: Image.Image) -> torch.Tensor:
+        """Process the full image in one model call when it fits, otherwise tile it."""
+        try:
+            return self.process_image_one_pass(image)
+        except torch.cuda.OutOfMemoryError:
+            logger.warning("One-pass processing ran out of CUDA memory; falling back to tiled processing.")
+            torch.cuda.empty_cache()
+            return self.process_big_image(image)
+
+    def process_image_one_pass(self, image: Image.Image) -> torch.Tensor:
+        logger.info(f"Processing image in one pass with size {image.size}")
+        patch_size = self.model.config.patch_size
+        num_reg = getattr(self.model.config, "num_register_tokens", 0)
+        with torch.inference_mode():
+            inputs = self.processor(images=image, return_tensors="pt", do_resize=False).to("cuda")
+            pixel_height, pixel_width = inputs["pixel_values"].shape[-2:]
+            feature_width = pixel_width // patch_size
+            feature_height = pixel_height // patch_size
+            outputs = self.model(**inputs)
+            tokens = outputs.last_hidden_state[0]
+            features = tokens[1 + num_reg :].reshape(feature_height, feature_width, -1).cpu()
+            return features.transpose(0, 1).contiguous()
+
     def process_big_image(self, image: Image.Image) -> torch.Tensor: 
         "splits the image into overlapping patches and center-weight averages the features"
         logger.info(f"Processing big image of size {image.size}")
@@ -54,7 +77,6 @@ class Backbone:
             )
             # batch and process patches
             batch_size = 8
-            assert len(patch_cords) % batch_size == 0, "Number of patches must be divisible by batch size"
             
             for i in range(0, len(patch_cords), batch_size):
                 batch_cords = patch_cords[i : i + batch_size]
@@ -67,7 +89,7 @@ class Backbone:
                     # For a 224x224 image, this results in 1 class token + 4 register tokens + 196 patch tokens = 201 tokens
                     out_x = x // patch_size
                     out_y = y // patch_size
-                    features = tokens[1 + num_reg :].reshape(patch_output_size, patch_output_size, -1).cpu()
+                    features = tokens[1 + num_reg :].reshape(patch_output_size, patch_output_size, -1).transpose(0, 1).cpu()
                     feature_slice = (slice(out_x, out_x + patch_output_size), slice(out_y, out_y + patch_output_size))
                     out_features[feature_slice] += features * feature_weights.unsqueeze(-1)
                     out_feature_weights[feature_slice] += feature_weights
