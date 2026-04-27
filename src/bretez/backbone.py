@@ -22,7 +22,7 @@ class Backbone:
         return outputs.last_hidden_state
 
     def process_big_image(self, image: Image.Image) -> torch.Tensor: 
-        "splits the image into overlappying patches and processes them, then averages the features"
+        "splits the image into overlapping patches and center-weight averages the features"
         logger.info(f"Processing big image of size {image.size}")
         tile_size = self.processor.size.width
         stride = tile_size // 2
@@ -33,6 +33,9 @@ class Backbone:
         patch_output_size = tile_size // patch_size
         stride_output_size = stride // patch_size
         num_reg = getattr(self.model.config, "num_register_tokens", 0)
+        patch_positions = torch.arange(patch_output_size, dtype=torch.float32)
+        feature_weights_1d = torch.minimum(patch_positions + 1, patch_output_size - patch_positions)
+        feature_weights = torch.outer(feature_weights_1d, feature_weights_1d)
         with torch.inference_mode():
             out_features = torch.zeros(
                 (
@@ -41,7 +44,7 @@ class Backbone:
                     self.model.config.hidden_size,
                 )
             )
-            feature_counts = torch.zeros(out_features.shape[:2], dtype=out_features.dtype)
+            out_feature_weights = torch.zeros(out_features.shape[:2], dtype=out_features.dtype)
             logger.debug(f"Processing image of size {image.size} with patch size {tile_size} and stride {stride}")
             patch_cords = list(
                 itertools.product(
@@ -66,7 +69,8 @@ class Backbone:
                     out_x = x // patch_size
                     out_y = y // patch_size
                     features = tokens[1 + num_reg :].reshape(patch_output_size, patch_output_size, -1).cpu()
-                    out_features[out_x : out_x + patch_output_size, out_y : out_y + patch_output_size] += features
-                    feature_counts[out_x : out_x + patch_output_size, out_y : out_y + patch_output_size] += 1
+                    feature_slice = (slice(out_x, out_x + patch_output_size), slice(out_y, out_y + patch_output_size))
+                    out_features[feature_slice] += features * feature_weights.unsqueeze(-1)
+                    out_feature_weights[feature_slice] += feature_weights
             
-            return out_features / feature_counts.clamp_min(1).unsqueeze(-1)
+            return out_features / out_feature_weights.clamp_min(1).unsqueeze(-1)
