@@ -53,8 +53,7 @@ class Backbone:
                 )
             )
             # batch and process patches
-            batch_size = 16
-
+            batch_size = 8
             assert len(patch_cords) % batch_size == 0, "Number of patches must be divisible by batch size"
             
             for i in range(0, len(patch_cords), batch_size):
