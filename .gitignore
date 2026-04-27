@@ -10,3 +10,4 @@ wheels/
 .venv
 *.pt
 *.log
+.bretez_cache/

@@ -16,9 +16,11 @@ dependencies = [
     "transformers>=5.0.0",
     "Pillow>=9.0.0",
     "matplotlib>=3.10.8",
+    "gradio>=5.0.0",
 ]
 
 scripts.bretez = "bretez.cli:main"
+scripts.bretez-viewer = "bretez.app:main"
 
 [build-system]
 requires = ["uv_build>=0.11.8,<0.12"]
