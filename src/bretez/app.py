@@ -34,6 +34,8 @@ class FeatureStore:
     flat_features: torch.Tensor
     preview_rgb: np.ndarray
     map_rgb: np.ndarray | None
+    map_scale_x: float
+    map_scale_y: float
     preview_step: int
     cache_dir: Path
     cache_key: str
@@ -77,16 +79,10 @@ class FeatureStore:
             np.savez_compressed(preview_path, rgb=preview_rgb)
 
         map_rgb = None
+        map_scale_x = 1.0
+        map_scale_y = 1.0
         if include_map:
-            map_rgb = _load_map_rgb(
-                resolved_cache_dir,
-                feature_path.stem,
-                map_image_path,
-                width,
-                height,
-                preview_rgb.shape[1],
-                preview_rgb.shape[0],
-            )
+            map_rgb, map_scale_x, map_scale_y = _load_map_rgb(map_image_path, width, height)
 
         return cls(
             path=feature_path,
@@ -94,6 +90,8 @@ class FeatureStore:
             flat_features=flat_features,
             preview_rgb=preview_rgb,
             map_rgb=map_rgb,
+            map_scale_x=map_scale_x,
+            map_scale_y=map_scale_y,
             preview_step=preview_step,
             cache_dir=resolved_cache_dir,
             cache_key=cache_key,
@@ -147,8 +145,17 @@ class FeatureStore:
         return min(max(x, 0), self.width - 1), min(max(y, 0), self.height - 1)
 
     def point_from_event(self, evt: gr.SelectData) -> tuple[int, int]:
+        return self.point_from_feature_event(evt)
+
+    def point_from_feature_event(self, evt: gr.SelectData) -> tuple[int, int]:
         image_x, image_y = _event_image_xy(evt)
         return self.clamp_xy(image_x * self.preview_step, image_y * self.preview_step)
+
+    def point_from_map_event(self, evt: gr.SelectData) -> tuple[int, int]:
+        if self.map_rgb is None:
+            return self.point_from_feature_event(evt)
+        image_x, image_y = _event_image_xy(evt)
+        return self.clamp_xy(image_x / self.map_scale_x, image_y / self.map_scale_y)
 
     def render_view(self, selected: tuple[int, int] | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
         map_image = self.map_image(selected)
@@ -159,14 +166,15 @@ class FeatureStore:
     def map_image(self, selected: tuple[int, int] | None = None) -> np.ndarray:
         if self.map_rgb is None:
             image = np.full((self.preview_height, self.preview_width, 3), 245, dtype=np.uint8)
+            self.draw_feature_marker(image, selected, color=(255, 255, 255), outline=(0, 0, 0))
         else:
             image = self.map_rgb.copy()
-        self.draw_selected_marker(image, selected, color=(255, 255, 255), outline=(0, 0, 0))
+            self.draw_map_marker(image, selected, color=(255, 255, 255), outline=(0, 0, 0))
         return image
 
     def feature_image(self, selected: tuple[int, int] | None = None) -> np.ndarray:
         image = self.preview_rgb.copy()
-        self.draw_selected_marker(image, selected, color=(255, 255, 255), outline=(0, 0, 0))
+        self.draw_feature_marker(image, selected, color=(255, 255, 255), outline=(0, 0, 0))
         return image
 
     def distance_overlay_image(self, selected: tuple[int, int] | None = None) -> tuple[np.ndarray, str]:
@@ -175,9 +183,14 @@ class FeatureStore:
 
         x, y = selected
         distance = self.cached_cosine_distance(x, y)
-        distance_preview = np.swapaxes(distance[:: self.preview_step, :: self.preview_step], 0, 1)
-        image = _blend_distance_over_map(self.map_image(), distance_preview, DISTANCE_OVERLAY_ALPHA)
-        self.draw_selected_marker(image, selected, color=(255, 255, 255), outline=(0, 0, 0))
+        if self.map_rgb is None:
+            distance_image = np.swapaxes(distance[:: self.preview_step, :: self.preview_step], 0, 1)
+            image = _blend_distance_over_map(self.map_image(), distance_image, DISTANCE_OVERLAY_ALPHA)
+            self.draw_feature_marker(image, selected, color=(255, 255, 255), outline=(0, 0, 0))
+        else:
+            distance_image = _resize_feature_values_to_map(distance, self.map_rgb.shape[:2], self.map_scale_x, self.map_scale_y)
+            image = _blend_distance_over_map(self.map_rgb, distance_image, DISTANCE_OVERLAY_ALPHA)
+            self.draw_map_marker(image, selected, color=(255, 255, 255), outline=(0, 0, 0))
         status = (
             f"Selected {x}, {y}"
             f"{self.map_value_status(selected)}"
@@ -191,12 +204,11 @@ class FeatureStore:
         if self.map_rgb is None:
             return ""
         x, y = selected
-        map_x = min(max(int(round(x / self.preview_step)), 0), self.preview_width - 1)
-        map_y = min(max(int(round(y / self.preview_step)), 0), self.preview_height - 1)
+        map_x, map_y = self.feature_to_map_xy(x, y)
         red, green, blue = (int(value) for value in self.map_rgb[map_y, map_x])
         return f" | map RGB {red}, {green}, {blue}"
 
-    def draw_selected_marker(
+    def draw_feature_marker(
         self,
         image: np.ndarray,
         selected: tuple[int, int] | None,
@@ -215,6 +227,28 @@ class FeatureStore:
         radius = max(5, min(image.shape[:2]) // 24)
         _draw_cross(image, marker_x, marker_y, radius + 2, outline)
         _draw_cross(image, marker_x, marker_y, radius, color)
+
+    def draw_map_marker(
+        self,
+        image: np.ndarray,
+        selected: tuple[int, int] | None,
+        *,
+        color: tuple[int, int, int],
+        outline: tuple[int, int, int],
+    ) -> None:
+        if selected is None:
+            return
+        marker_x, marker_y = self.feature_to_map_xy(*selected)
+        radius = max(5, min(image.shape[:2]) // 24)
+        _draw_cross(image, marker_x, marker_y, radius + 2, outline)
+        _draw_cross(image, marker_x, marker_y, radius, color)
+
+    def feature_to_map_xy(self, x: int, y: int) -> tuple[int, int]:
+        if self.map_rgb is None:
+            return int(round(x / self.preview_step)), int(round(y / self.preview_step))
+        map_x = int(round((x + 0.5) * self.map_scale_x - 0.5))
+        map_y = int(round((y + 0.5) * self.map_scale_y - 0.5))
+        return min(max(map_x, 0), self.map_rgb.shape[1] - 1), min(max(map_y, 0), self.map_rgb.shape[0] - 1)
 
     def cached_cosine_distance(self, x: int, y: int) -> np.ndarray:
         if self._last_distance_xy == (x, y) and self._last_distance is not None:
@@ -273,8 +307,13 @@ def create_app(
 
     initial_map, initial_feature, initial_overlay, initial_status = store.render_view()
 
+    def select_map_feature(_x_value: Any, _y_value: Any, evt: gr.SelectData):
+        selected = store.point_from_map_event(evt)
+        map_image, feature_image, overlay_image, status = store.render_view(selected)
+        return map_image, feature_image, overlay_image, status, selected[0], selected[1]
+
     def select_feature(_x_value: Any, _y_value: Any, evt: gr.SelectData):
-        selected = store.point_from_event(evt)
+        selected = store.point_from_feature_event(evt)
         map_image, feature_image, overlay_image, status = store.render_view(selected)
         return map_image, feature_image, overlay_image, status, selected[0], selected[1]
 
@@ -293,6 +332,7 @@ def create_app(
                 label="Original map",
                 type="numpy",
                 interactive=False,
+                format="jpeg",
                 height=620,
                 buttons=["download", "fullscreen"],
             )
@@ -309,6 +349,7 @@ def create_app(
                 label="Map + cosine distance",
                 type="numpy",
                 interactive=False,
+                format="jpeg",
                 height=620,
                 buttons=["download", "fullscreen"],
             )
@@ -319,9 +360,9 @@ def create_app(
             measure = gr.Button("Measure", variant="primary")
 
         select_outputs = [map_image, feature_image, distance_image, status, x_input, y_input]
-        map_image.select(select_feature, inputs=[x_input, y_input], outputs=select_outputs)
+        map_image.select(select_map_feature, inputs=[x_input, y_input], outputs=select_outputs)
         feature_image.select(select_feature, inputs=[x_input, y_input], outputs=select_outputs)
-        distance_image.select(select_feature, inputs=[x_input, y_input], outputs=select_outputs)
+        distance_image.select(select_map_feature, inputs=[x_input, y_input], outputs=select_outputs)
 
         measure.click(
             measure_feature,
@@ -446,25 +487,13 @@ def _pca_components(centered_sample: torch.Tensor, channels: int) -> torch.Tenso
 
 
 def _load_map_rgb(
-    cache_dir: Path,
-    feature_stem: str,
     map_image_path: str | Path | None,
     feature_width: int,
     feature_height: int,
-    preview_width: int,
-    preview_height: int,
-) -> np.ndarray:
-    image, image_key = _load_map_image(map_image_path)
-    crop_box = _map_crop_box(image.size, feature_width, feature_height)
-    preview_key = _map_preview_cache_key(image_key, image.size, crop_box, feature_width, feature_height, preview_width, preview_height)
-    preview_path = cache_dir / f"{feature_stem}-{preview_key}-map-preview.npz"
-    if preview_path.exists():
-        return np.load(preview_path)["rgb"]
-
-    resampling = getattr(Image, "Resampling", Image).BILINEAR
-    map_rgb = np.asarray(image.crop(crop_box).convert("RGB").resize((preview_width, preview_height), resampling)).copy()
-    np.savez_compressed(preview_path, rgb=map_rgb)
-    return map_rgb
+) -> tuple[np.ndarray, float, float]:
+    image, _image_key = _load_map_image(map_image_path)
+    scale_x, scale_y = _infer_map_scale(image.size[0], image.size[1], feature_width, feature_height)
+    return np.asarray(image.convert("RGB")).copy(), scale_x, scale_y
 
 
 def _load_map_image(map_image_path: str | Path | None) -> tuple[Image.Image, str]:
@@ -512,6 +541,23 @@ def _scale_matches_map(image_width: int, image_height: int, feature_width: int, 
     return crop_width / image_width >= 0.95 and crop_height / image_height >= 0.95
 
 
+def _resize_feature_values_to_map(distance: np.ndarray, map_shape: tuple[int, int], scale_x: float, scale_y: float) -> np.ndarray:
+    map_height, map_width = map_shape
+    feature_width, feature_height = distance.shape
+    coverage_width = min(map_width, max(1, int(round(feature_width * scale_x))))
+    coverage_height = min(map_height, max(1, int(round(feature_height * scale_y))))
+    resampling = getattr(Image, "Resampling", Image).BILINEAR
+    feature_image = Image.fromarray(np.swapaxes(distance, 0, 1).astype(np.float32), mode="F")
+    coverage = np.asarray(feature_image.resize((coverage_width, coverage_height), resampling))
+
+    if coverage.shape == (map_height, map_width):
+        return coverage
+
+    full_distance = np.full((map_height, map_width), np.nan, dtype=np.float32)
+    full_distance[:coverage_height, :coverage_width] = coverage
+    return full_distance
+
+
 def _distance_to_rgb(distance: np.ndarray) -> np.ndarray:
     normalized = _distance_display_values(distance)
     return (colormaps[DISTANCE_COLORMAP](normalized)[..., :3] * 255).round().astype(np.uint8)
@@ -523,17 +569,28 @@ def _distance_display_values(distance: np.ndarray) -> np.ndarray:
 
 
 def _blend_distance_over_map(map_image: np.ndarray, distance: np.ndarray, alpha: float) -> np.ndarray:
-    distance_rgb = _distance_to_rgb(distance)
-    if map_image.shape[:2] != distance_rgb.shape[:2]:
-        height = min(map_image.shape[0], distance_rgb.shape[0])
-        width = min(map_image.shape[1], distance_rgb.shape[1])
+    if map_image.shape[:2] != distance.shape[:2]:
+        height = min(map_image.shape[0], distance.shape[0])
+        width = min(map_image.shape[1], distance.shape[1])
         map_image = map_image[:height, :width]
-        distance_rgb = distance_rgb[:height, :width]
         distance = distance[:height, :width]
-    normalized = _distance_display_values(distance)[..., None]
-    distance_alpha = DISTANCE_OVERLAY_ALPHA_MIN + ((alpha - DISTANCE_OVERLAY_ALPHA_MIN) * (1.0 - normalized))
-    blended = (map_image.astype(np.float32) * (1.0 - distance_alpha)) + (distance_rgb.astype(np.float32) * distance_alpha)
-    return blended.clip(0, 255).round().astype(np.uint8)
+
+    blended = np.empty_like(map_image)
+    chunk_rows = 256
+    for start in range(0, map_image.shape[0], chunk_rows):
+        end = min(start + chunk_rows, map_image.shape[0])
+        distance_chunk = distance[start:end]
+        distance_rgb = _distance_to_rgb(distance_chunk)
+        valid = np.isfinite(distance_chunk)[..., None]
+        normalized = _distance_display_values(distance_chunk)[..., None]
+        distance_alpha = DISTANCE_OVERLAY_ALPHA_MIN + ((alpha - DISTANCE_OVERLAY_ALPHA_MIN) * (1.0 - normalized))
+        distance_alpha = np.where(valid, distance_alpha, 0.0)
+        blended_chunk = (map_image[start:end].astype(np.float32) * (1.0 - distance_alpha)) + (
+            distance_rgb.astype(np.float32) * distance_alpha
+        )
+        blended[start:end] = blended_chunk.clip(0, 255).round().astype(np.uint8)
+
+    return blended
 
 
 def _draw_cross(image: np.ndarray, x: int, y: int, radius: int, color: tuple[int, int, int]) -> None:
@@ -581,22 +638,6 @@ def _path_cache_key(path: Path) -> str:
 
 def _preview_cache_key(cache_key: str, preview_step: int, pca_sample: int) -> str:
     payload = f"{cache_key}|step={preview_step}|sample={pca_sample}"
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-
-
-def _map_preview_cache_key(
-    image_key: str,
-    image_size: tuple[int, int],
-    crop_box: tuple[int, int, int, int],
-    feature_width: int,
-    feature_height: int,
-    preview_width: int,
-    preview_height: int,
-) -> str:
-    payload = (
-        f"{image_key}|image={image_size[0]}x{image_size[1]}|crop={crop_box}"
-        f"|feature={feature_width}x{feature_height}|preview={preview_width}x{preview_height}"
-    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
