@@ -76,7 +76,7 @@ class Backbone:
                 )
             )
             # batch and process patches
-            batch_size = 8
+            batch_size = 32
             
             for i in range(0, len(patch_cords), batch_size):
                 batch_cords = patch_cords[i : i + batch_size]

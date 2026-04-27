@@ -14,6 +14,8 @@ import torch.nn.functional as F
 from matplotlib import colormaps
 from PIL import Image
 
+from bretez.config import DINO_PATCH_SIZE, MAP_PIXELS_PER_FEATURE
+
 
 EPS = 1e-8
 CACHE_VERSION = "1"
@@ -453,12 +455,12 @@ def _load_map_rgb(
     preview_height: int,
 ) -> np.ndarray:
     image, image_key = _load_map_image(map_image_path)
-    preview_key = _map_preview_cache_key(image_key, feature_width, feature_height, preview_width, preview_height)
+    crop_box = _map_crop_box(image.size, feature_width, feature_height)
+    preview_key = _map_preview_cache_key(image_key, image.size, crop_box, feature_width, feature_height, preview_width, preview_height)
     preview_path = cache_dir / f"{feature_stem}-{preview_key}-map-preview.npz"
     if preview_path.exists():
         return np.load(preview_path)["rgb"]
 
-    crop_box = _map_crop_box(image.size, feature_width, feature_height)
     resampling = getattr(Image, "Resampling", Image).BILINEAR
     map_rgb = np.asarray(image.crop(crop_box).convert("RGB").resize((preview_width, preview_height), resampling)).copy()
     np.savez_compressed(preview_path, rgb=map_rgb)
@@ -471,9 +473,9 @@ def _load_map_image(map_image_path: str | Path | None) -> tuple[Image.Image, str
         image = Image.open(path)
         return image, _path_cache_key(path)
 
-    from bretez.loader import load_image
+    from bretez.loader import load_original_image
 
-    image = load_image()
+    image = load_original_image()
     filename = getattr(image, "filename", None)
     if filename:
         return image, _path_cache_key(Path(filename).expanduser().resolve())
@@ -490,15 +492,24 @@ def _map_crop_box(image_size: tuple[int, int], feature_width: int, feature_heigh
 
 
 def _infer_map_scale(image_width: int, image_height: int, feature_width: int, feature_height: int) -> tuple[float, float]:
+    for scale in (MAP_PIXELS_PER_FEATURE, DINO_PATCH_SIZE):
+        if _scale_matches_map(image_width, image_height, feature_width, feature_height, scale):
+            return float(scale), float(scale)
+
     x_scale = image_width / feature_width
     y_scale = image_height / feature_height
-    rounded_y = round(y_scale)
-    if rounded_y > 0 and abs(y_scale - rounded_y) < 0.01 and rounded_y * feature_width <= image_width:
-        return float(rounded_y), float(rounded_y)
-    rounded_x = round(x_scale)
-    if rounded_x > 0 and abs(x_scale - rounded_x) < 0.01 and rounded_x * feature_height <= image_height:
-        return float(rounded_x), float(rounded_x)
+    common_scale = math.floor(min(x_scale, y_scale))
+    if common_scale > 0 and _scale_matches_map(image_width, image_height, feature_width, feature_height, common_scale):
+        return float(common_scale), float(common_scale)
     return x_scale, y_scale
+
+
+def _scale_matches_map(image_width: int, image_height: int, feature_width: int, feature_height: int, scale: int) -> bool:
+    crop_width = feature_width * scale
+    crop_height = feature_height * scale
+    if crop_width > image_width or crop_height > image_height:
+        return False
+    return crop_width / image_width >= 0.95 and crop_height / image_height >= 0.95
 
 
 def _distance_to_rgb(distance: np.ndarray) -> np.ndarray:
@@ -573,8 +584,19 @@ def _preview_cache_key(cache_key: str, preview_step: int, pca_sample: int) -> st
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def _map_preview_cache_key(image_key: str, feature_width: int, feature_height: int, preview_width: int, preview_height: int) -> str:
-    payload = f"{image_key}|feature={feature_width}x{feature_height}|preview={preview_width}x{preview_height}"
+def _map_preview_cache_key(
+    image_key: str,
+    image_size: tuple[int, int],
+    crop_box: tuple[int, int, int, int],
+    feature_width: int,
+    feature_height: int,
+    preview_width: int,
+    preview_height: int,
+) -> str:
+    payload = (
+        f"{image_key}|image={image_size[0]}x{image_size[1]}|crop={crop_box}"
+        f"|feature={feature_width}x{feature_height}|preview={preview_width}x{preview_height}"
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 

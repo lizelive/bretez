@@ -6,10 +6,13 @@ from .config import INPUT_IMAGE_DOWNSCALE_FACTOR
 Image.MAX_IMAGE_PIXELS = None
 
 
-def load_image(downscale_factor: int = INPUT_IMAGE_DOWNSCALE_FACTOR) -> Image.Image:
+def load_original_image() -> Image.Image:
     file = hf_hub_download(repo_id="peasanttide/turgot-david-rumsey", filename="sheet_15.jpg", repo_type="dataset")
-    im = Image.open(file)
-    return downscale_image(im, downscale_factor)
+    return Image.open(file)
+
+
+def load_image(downscale_factor: int = INPUT_IMAGE_DOWNSCALE_FACTOR) -> Image.Image:
+    return downscale_image(load_original_image(), downscale_factor)
 
 
 def downscale_image(image: Image.Image, factor: int) -> Image.Image:
