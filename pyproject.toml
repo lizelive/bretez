@@ -8,8 +8,11 @@ dependencies = [
     "accelerate>=1.12.0",
     "datasets>=4.4.2",
     "diffusers>=0.36.0",
+    "fastapi>=0.115.0",
     "lightning>=2.6.0",
+    "mcp>=1.2.0",
     "opencv-python>=4.12.0.88",
+    "pydantic>=2.8.0",
     "tensorboard>=2.20.0",
     "torch>=2.9.1",
     "torchvision>=0.24.1",
@@ -17,10 +20,16 @@ dependencies = [
     "Pillow>=9.0.0",
     "matplotlib>=3.10.8",
     "gradio>=5.0.0",
+    "uvicorn[standard]>=0.32.0",
 ]
 
-scripts.bretez = "bretez.cli:main"
-scripts.bretez-viewer = "bretez.app:main"
+[project.scripts]
+bretez = "bretez.cli:main"
+bretez-extract = "bretez.extractor:main"
+bretez-train-classifier = "bretez.classifier:main"
+bretez-viewer = "bretez.app:main"
+bretez-map = "bretez.server:main"
+bretez-mcp = "bretez.mcp_server:main"
 
 [build-system]
 requires = ["uv_build>=0.11.8,<0.12"]

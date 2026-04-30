@@ -9,5 +9,7 @@ wheels/
 # Virtual environments
 .venv
 *.pt
+*.pt.json
 *.log
+.bretez/
 .bretez_cache/

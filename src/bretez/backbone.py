@@ -1,23 +1,25 @@
-from transformers import AutoImageProcessor, AutoModel
+import itertools
+import logging
 
 import torch
+from PIL import Image
+from transformers import AutoImageProcessor, AutoModel
 
 SAT_MODEL_BIG = "facebook/dinov3-vit7b16-pretrain-sat493m"
 SAT_MODEL_SMALL = "facebook/dinov3-vitl16-pretrain-sat493m"
-from PIL import Image
 
-import itertools
-
-import logging
 logger = logging.getLogger(__name__)
 
+
 class Backbone:
-    def __init__(self, model_name=SAT_MODEL_SMALL):
-        self.model = AutoModel.from_pretrained(model_name).to("cuda").eval()
+    def __init__(self, model_name=SAT_MODEL_SMALL, *, device: str = "auto", batch_size: int = 32):
+        self.device = _select_device(device)
+        self.batch_size = batch_size
+        self.model = AutoModel.from_pretrained(model_name).to(self.device).eval()
         self.processor = AutoImageProcessor.from_pretrained(model_name)
 
     def __call__(self, images):
-        inputs = self.processor(images=images, return_tensors="pt").to("cuda")
+        inputs = self.processor(images=images, return_tensors="pt").to(self.device)
         outputs = self.model(**inputs)
         return outputs.last_hidden_state
 
@@ -35,7 +37,7 @@ class Backbone:
         patch_size = self.model.config.patch_size
         num_reg = getattr(self.model.config, "num_register_tokens", 0)
         with torch.inference_mode():
-            inputs = self.processor(images=image, return_tensors="pt", do_resize=False).to("cuda")
+            inputs = self.processor(images=image, return_tensors="pt", do_resize=False).to(self.device)
             pixel_height, pixel_width = inputs["pixel_values"].shape[-2:]
             feature_width = pixel_width // patch_size
             feature_height = pixel_height // patch_size
@@ -76,13 +78,11 @@ class Backbone:
                 )
             )
             # batch and process patches
-            batch_size = 32
-            
-            for i in range(0, len(patch_cords), batch_size):
-                batch_cords = patch_cords[i : i + batch_size]
+            for i in range(0, len(patch_cords), self.batch_size):
+                batch_cords = patch_cords[i : i + self.batch_size]
                 batch_images = [image.crop((x, y, x + tile_size, y + tile_size)) for x, y in batch_cords]
                 batch_features = self(batch_images)
-                logger.info(f"Processed batch {i // batch_size + 1} / {(len(patch_cords) + batch_size - 1) // batch_size}")
+                logger.info(f"Processed batch {i // self.batch_size + 1} / {(len(patch_cords) + self.batch_size - 1) // self.batch_size}")
 
                 for (x, y), tokens in zip(batch_cords, batch_features):
                     # These models follow a ViT architecture, with a patch size of 16.
@@ -95,3 +95,11 @@ class Backbone:
                     out_feature_weights[feature_slice] += feature_weights
             
             return out_features / out_feature_weights.clamp_min(1).unsqueeze(-1)
+
+
+def _select_device(device: str) -> torch.device:
+    if device == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA was requested, but torch.cuda.is_available() is false.")
+    return torch.device(device)

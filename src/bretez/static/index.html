@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bretez Mapper</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script defer src="/static/app.js"></script>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="panel panel-left">
+        <div class="brand">
+          <div>
+            <h1>Bretez</h1>
+            <p id="saveState">Loading</p>
+          </div>
+          <button class="icon-button" id="fitButton" title="Fit map"><span class="button-icon">[]</span><span>Fit</span></button>
+        </div>
+
+        <section class="control-group">
+          <label for="layerSelect">Layer</label>
+          <select id="layerSelect"></select>
+        </section>
+
+        <section class="control-group">
+          <label for="classSelect">Class</label>
+          <select id="classSelect"></select>
+        </section>
+
+        <section class="tool-grid" aria-label="Tools">
+          <button class="tool-button is-active" data-tool="select" title="Select"><span class="button-icon">^</span><span>Select</span></button>
+          <button class="tool-button" data-tool="pan" title="Pan"><span class="button-icon">+</span><span>Pan</span></button>
+          <button class="tool-button" data-tool="rectangle" title="Rectangle"><span class="button-icon">[]</span><span>Rect</span></button>
+          <button class="tool-button" data-tool="vertex" title="Vertex"><span class="button-icon">o</span><span>Vertex</span></button>
+          <button class="tool-button" data-tool="line" title="Line"><span class="button-icon">/</span><span>Line</span></button>
+          <button class="tool-button" data-tool="face" title="Face"><span class="button-icon">&lt;&gt;</span><span>Face</span></button>
+        </section>
+
+        <section class="action-row">
+          <button class="icon-button" id="undoButton" title="Undo"><span class="button-icon">&lt;</span><span>Undo</span></button>
+          <button class="icon-button" id="redoButton" title="Redo"><span class="button-icon">&gt;</span><span>Redo</span></button>
+          <button class="icon-button danger" id="deleteButton" title="Delete"><span class="button-icon">x</span><span>Delete</span></button>
+        </section>
+
+        <section class="automation-panel">
+          <div class="panel-title compact">
+            <h2>Model</h2>
+          </div>
+          <button class="wide-button" id="extractButton" title="Extract DINO features"><span class="button-icon">fx</span><span>Extract features</span></button>
+          <button class="wide-button" id="trainButton" title="Train classifier"><span class="button-icon">tr</span><span>Train classifier</span></button>
+          <button class="wide-button" id="refreshAssetsButton" title="Refresh layers"><span class="button-icon">rf</span><span>Refresh layers</span></button>
+          <p id="jobStatus">Idle</p>
+        </section>
+
+        <section class="stats" id="stats"></section>
+      </aside>
+
+      <main class="map-stage">
+        <canvas id="mapCanvas"></canvas>
+        <div class="statusbar">
+          <span id="coordinateReadout">0, 0</span>
+          <span id="zoomReadout">100%</span>
+          <span id="selectionReadout">No selection</span>
+        </div>
+      </main>
+
+      <aside class="panel panel-right">
+        <div class="panel-title">
+          <h2>Inspector</h2>
+          <button class="icon-button" id="propertiesSave" title="Save properties"><span class="button-icon">s</span><span>Save</span></button>
+        </div>
+        <form id="propertiesForm" class="properties-form"></form>
+
+        <div class="panel-title compact">
+          <h2>History</h2>
+        </div>
+        <ol class="history-list" id="historyList"></ol>
+      </aside>
+    </div>
+  </body>
+</html>
